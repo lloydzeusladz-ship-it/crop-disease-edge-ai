@@ -1,0 +1,11 @@
+# Generated assets
+offline_crop_ai_qr.png
+icon-192.png
+icon-512.png
+
+# Local HTTPS certs
+.certs/
+
+# OS files
+.DS_Store
+Thumbs.db

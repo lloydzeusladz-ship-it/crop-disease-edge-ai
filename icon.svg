@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#121212"/>
+  <!-- Leaf -->
+  <g transform="translate(256,240)">
+    <ellipse cx="0" cy="0" rx="100" ry="60" fill="#4caf50" transform="rotate(-30)"/>
+    <ellipse cx="0" cy="0" rx="100" ry="60" fill="#388e3c" transform="rotate(-30)" opacity="0.5"/>
+    <line x1="0" y1="0" x2="-70" y2="42" stroke="#2e7d32" stroke-width="3" transform="rotate(-30)"/>
+    <line x1="-20" y1="-5" x2="-50" y2="20" stroke="#2e7d32" stroke-width="2" transform="rotate(-30)"/>
+    <line x1="20" y1="5" x2="-10" y2="30" stroke="#2e7d32" stroke-width="2" transform="rotate(-30)"/>
+    <!-- Stem -->
+    <line x1="65" y1="-38" x2="90" y2="-80" stroke="#795548" stroke-width="6" stroke-linecap="round"/>
+  </g>
+  <!-- AI sparkle -->
+  <circle cx="340" cy="140" r="6" fill="#fff" opacity="0.9"/>
+  <circle cx="365" cy="120" r="3" fill="#fff" opacity="0.6"/>
+  <circle cx="350" cy="155" r="4" fill="#fff" opacity="0.7"/>
+  <!-- Text -->
+  <text x="256" y="380" text-anchor="middle" font-family="sans-serif" font-weight="bold" font-size="48" fill="#e0e0e0">CropAI</text>
+  <text x="256" y="410" text-anchor="middle" font-family="sans-serif" font-size="20" fill="#888">Edge Diagnostics</text>
+</svg>

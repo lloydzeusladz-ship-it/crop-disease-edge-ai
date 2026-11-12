@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Offline Crop Disease Detector</title>
+    <meta name="description" content="Edge-AI powered crop disease detection running entirely on-device.">
+    <meta name="theme-color" content="#121212">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="./manifest.json">
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="./icon-192.png">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            text-align: center;
+            background: #121212;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 16px 16px 32px;
+        }
+
+        header { padding: 12px 0 4px; }
+        header h1 { font-size: 1.4rem; color: #4caf50; margin-bottom: 4px; }
+        header p  { font-size: 0.85rem; color: #888; }
+
+        /* ── Status banner ─────────────────────── */
+        #status-bar {
+            display: inline-flex; align-items: center; gap: 8px;
+            margin: 12px auto; padding: 6px 16px; border-radius: 20px;
+            font-size: 0.8rem; font-weight: 600;
+            background: #1a1a2e; color: #aaa;
+            transition: all 0.3s ease;
+        }
+        #status-bar.ready   { background: #1b3a1b; color: #66bb6a; }
+        #status-bar.error   { background: #3a1b1b; color: #ef5350; }
+        #status-bar.loading { background: #1a1a2e; color: #42a5f5; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+        #status-bar.loading .status-dot { animation: pulse 1s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+        /* ── Backend badge ─────────────────────── */
+        #backend-badge { font-size: 0.7rem; color: #666; margin-bottom: 10px; }
+        #backend-badge span {
+            background: #1e1e2e; padding: 2px 8px; border-radius: 4px; font-family: monospace;
+        }
+
+        /* ── Webcam ────────────────────────────── */
+        #webcam-container {
+            position: relative; margin: 10px auto; border-radius: 16px; overflow: hidden;
+            width: 300px; height: 300px; background: #000; border: 2px solid #2a2a2a;
+        }
+        #webcam-container canvas,
+        #webcam-container video { width: 100%; height: 100%; object-fit: cover; }
+
+        /* ── Loading overlay ───────────────────── */
+        #loading-overlay {
+            position: absolute; inset: 0;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: rgba(0,0,0,0.85); z-index: 10; gap: 12px;
+        }
+        #loading-overlay.hidden { display: none; }
+        .spinner {
+            width: 40px; height: 40px;
+            border: 3px solid #333; border-top-color: #4caf50;
+            border-radius: 50%; animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #loading-overlay p { font-size: 0.8rem; color: #aaa; }
+
+        /* ── Predictions ───────────────────────── */
+        #label-container { margin-top: 16px; }
+        .metric {
+            background: #1e1e1e; padding: 12px 16px; margin: 6px auto; max-width: 340px;
+            border-radius: 10px; display: flex; justify-content: space-between; align-items: center;
+            font-size: 0.95rem; border-left: 3px solid #333; transition: border-color 0.3s;
+        }
+        .metric.top { border-left-color: #4caf50; background: #1b2e1b; }
+        .metric .class-name { text-align: left; flex: 1; }
+        .metric .confidence {
+            font-family: monospace; font-weight: bold; margin-left: 12px;
+            min-width: 65px; text-align: right;
+        }
+        .metric .bar-bg {
+            flex: 0 0 80px; height: 6px; background: #333;
+            border-radius: 3px; margin-left: 12px; overflow: hidden;
+        }
+        .metric .bar-fill {
+            height: 100%; background: #4caf50; border-radius: 3px; transition: width 0.2s ease;
+        }
+
+        /* ── Upload fallback ───────────────────── */
+        #upload-section { margin: 16px auto; max-width: 340px; }
+        #upload-btn {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 12px 24px; background: #1e3a5f; color: #90caf9;
+            border: 1px solid #2a5a8f; border-radius: 10px;
+            font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: background 0.2s;
+        }
+        #upload-btn:hover  { background: #254a6f; }
+        #upload-btn:active { background: #1a2f4a; }
+        #file-input { display: none; }
+        #preview-image { width: 100%; height: 100%; object-fit: cover; display: none; }
+
+        /* ── Error state ───────────────────────── */
+        #error-container {
+            display: none; margin: 20px auto; max-width: 340px; padding: 20px;
+            background: #2a1515; border-radius: 12px; border: 1px solid #5a2020;
+        }
+        #error-container h3 { color: #ef5350; margin-bottom: 8px; font-size: 1rem; }
+        #error-container p  { font-size: 0.85rem; color: #ccc; line-height: 1.4; }
+        #retry-btn {
+            margin-top: 12px; padding: 10px 28px; background: #4caf50; color: #fff;
+            border: none; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer;
+        }
+        #retry-btn:active { background: #388e3c; }
+
+        footer { margin-top: 28px; font-size: 0.7rem; color: #555; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>🌿 Edge-AI Crop Diagnostics</h1>
+        <p>Point camera at a tomato leaf specimen</p>
+    </header>
+
+    <div id="status-bar" class="loading">
+        <span class="status-dot"></span>
+        <span id="status-text">Loading model…</span>
+    </div>
+
+    <div id="backend-badge"></div>
+
+    <div id="webcam-container">
+        <div id="loading-overlay">
+            <div class="spinner"></div>
+            <p id="loading-text">Initializing…</p>
+        </div>
+        <img id="preview-image" alt="Uploaded leaf image">
+    </div>
+
+    <div id="upload-section">
+        <input type="file" id="file-input" accept="image/*" capture="environment">
+        <button id="upload-btn" onclick="document.getElementById('file-input').click()">
+            📷 Upload or Take Photo
+        </button>
+    </div>
+
+    <div id="label-container"></div>
+
+    <div id="error-container">
+        <h3>⚠️ Something went wrong</h3>
+        <p id="error-message"></p>
+        <button id="retry-btn" onclick="location.reload()">Retry</button>
+    </div>
+
+    <footer>
+        Runs entirely on-device &middot; No data leaves your phone &middot; Works offline
+    </footer>
+
+    <!-- ═══ ALL SCRIPTS LOCAL — ZERO CDN DEPENDENCIES ═══ -->
+    <script src="./libs/tf.min.js"></script>
+    <script src="./libs/tf-backend-wasm.min.js"></script>
+    <script src="./libs/teachablemachine-image.min.js"></script>
+    <script src="./app.js"></script>
+
+    <script>
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.register("./sw.js")
+                .then(reg => {
+                    console.log("SW registered:", reg.scope);
+                    reg.addEventListener("updatefound", () => {
+                        const newSW = reg.installing;
+                        newSW.addEventListener("statechange", () => {
+                            if (newSW.state === "activated") {
+                                console.log("New SW activated — app updated.");
+                            }
+                        });
+                    });
+                })
+                .catch(err => console.warn("SW registration failed:", err));
+        }
+    </script>
+</body>
+</html>
