@@ -393,6 +393,36 @@
             color: var(--text-muted);
             opacity: 0.5;
         }
+
+        /* ── Reset / Update Button ───────────────── */
+        .reset-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: 100%;
+            max-width: 420px;
+            margin-top: 20px;
+            padding: 14px;
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px dashed var(--border);
+            border-radius: var(--radius-sm);
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .reset-btn:hover {
+            color: var(--accent-blue);
+            border-color: var(--accent-blue);
+            background: var(--accent-blue-bg);
+        }
+        .reset-btn:active { transform: scale(0.98); }
+        .reset-btn.resetting {
+            pointer-events: none;
+            opacity: 0.5;
+        }
     </style>
 </head>
 <body>
@@ -438,7 +468,7 @@
         </div>
     </div>
 
-    <input type="file" id="file-input" accept="image/*" capture="environment">
+    <input type="file" id="file-input" accept="image/*">
 
     <!-- Diagnosis Result -->
     <div class="result-card" id="result-card">
@@ -464,6 +494,11 @@
 
     <div class="backend-info" id="backend-info"></div>
 
+    <!-- Force Reset / Update -->
+    <button class="reset-btn" id="reset-btn" onclick="forceResetApp()">
+        🔄 Check for Updates / Reset App
+    </button>
+
     <footer>
         100% on-device &middot; No data leaves your phone
     </footer>
@@ -479,6 +514,45 @@
             navigator.serviceWorker.register('./sw.js')
                 .then(reg => console.log('SW registered:', reg.scope))
                 .catch(err => console.warn('SW registration failed:', err));
+        }
+
+        /**
+         * Nuclear reset: unregister all service workers, delete all caches,
+         * clear storage, and hard-reload to fetch fresh files from server.
+         */
+        async function forceResetApp() {
+            const btn = document.getElementById('reset-btn');
+            btn.classList.add('resetting');
+            btn.textContent = '⏳ Resetting…';
+
+            try {
+                // 1. Unregister all service workers
+                if ('serviceWorker' in navigator) {
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+                    await Promise.all(registrations.map(reg => reg.unregister()));
+                    console.log('[Reset] Unregistered', registrations.length, 'service worker(s)');
+                }
+
+                // 2. Delete all caches
+                const cacheNames = await caches.keys();
+                await Promise.all(cacheNames.map(name => caches.delete(name)));
+                console.log('[Reset] Deleted', cacheNames.length, 'cache(s)');
+
+                // 3. Clear local/session storage
+                try { localStorage.clear(); } catch (e) {}
+                try { sessionStorage.clear(); } catch (e) {}
+
+                // 4. Hard reload — cache-bust with timestamp query param
+                console.log('[Reset] Reloading…');
+                window.location.href = window.location.pathname + '?cache_bust=' + Date.now();
+            } catch (err) {
+                console.error('[Reset] Failed:', err);
+                btn.classList.remove('resetting');
+                btn.textContent = '❌ Reset failed — try again';
+                setTimeout(() => {
+                    btn.textContent = '🔄 Check for Updates / Reset App';
+                }, 3000);
+            }
         }
     </script>
 </body>
