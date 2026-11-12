@@ -3,167 +3,472 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Offline Crop Disease Detector</title>
-    <meta name="description" content="Edge-AI powered crop disease detection running entirely on-device.">
-    <meta name="theme-color" content="#121212">
+    <title>Crop Disease Detector</title>
+    <meta name="description" content="Edge-AI crop disease detection — 100% on-device, fully offline.">
+    <meta name="theme-color" content="#0f1419">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="./manifest.json">
     <link rel="icon" href="./icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="./icon-192.png">
     <style>
+        :root {
+            --bg-primary:   #0f1419;
+            --bg-card:      #1a2332;
+            --bg-card-alt:  #1e2a3a;
+            --border:       #2a3a4a;
+            --text-primary: #e8ecf1;
+            --text-muted:   #7a8a9a;
+            --accent-green: #10b981;
+            --accent-green-bg: rgba(16, 185, 129, 0.12);
+            --accent-amber: #f59e0b;
+            --accent-amber-bg: rgba(245, 158, 11, 0.12);
+            --accent-red:   #ef4444;
+            --accent-red-bg: rgba(239, 68, 68, 0.12);
+            --accent-blue:  #3b82f6;
+            --accent-blue-bg: rgba(59, 130, 246, 0.10);
+            --radius:       16px;
+            --radius-sm:    10px;
+        }
+
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            text-align: center;
-            background: #121212;
-            color: #e0e0e0;
+            background: var(--bg-primary);
+            color: var(--text-primary);
             min-height: 100vh;
-            padding: 16px 16px 32px;
+            min-height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 0 16px 32px;
+            -webkit-tap-highlight-color: transparent;
         }
 
-        header { padding: 12px 0 4px; }
-        header h1 { font-size: 1.4rem; color: #4caf50; margin-bottom: 4px; }
-        header p  { font-size: 0.85rem; color: #888; }
-
-        /* Status banner */
-        #status-bar {
-            display: inline-flex; align-items: center; gap: 8px;
-            margin: 12px auto; padding: 6px 16px; border-radius: 20px;
-            font-size: 0.8rem; font-weight: 600;
-            background: #1a1a2e; color: #aaa;
-            transition: all 0.3s ease;
+        /* ── Header ──────────────────────────────── */
+        .app-header {
+            width: 100%;
+            max-width: 420px;
+            padding: 20px 0 8px;
+            text-align: center;
         }
-        #status-bar.ready   { background: #1b3a1b; color: #66bb6a; }
-        #status-bar.error   { background: #3a1b1b; color: #ef5350; }
-        #status-bar.loading { background: #1a1a2e; color: #42a5f5; }
+        .app-header h1 {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--accent-green);
+            letter-spacing: -0.02em;
+        }
+        .app-header .subtitle {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* ── Mode Toggle ─────────────────────────── */
+        .mode-toggle {
+            display: flex;
+            width: 100%;
+            max-width: 420px;
+            background: var(--bg-card);
+            border-radius: var(--radius-sm);
+            padding: 4px;
+            margin: 12px 0;
+            border: 1px solid var(--border);
+        }
+        .mode-btn {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 14px 16px;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .mode-btn.active {
+            background: var(--accent-blue-bg);
+            color: var(--accent-blue);
+        }
+        .mode-btn:active { transform: scale(0.97); }
+
+        /* ── Status Pill ─────────────────────────── */
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 14px;
+            border-radius: 20px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            margin-bottom: 10px;
+            transition: all 0.3s;
+        }
+        .status-pill.loading { background: var(--accent-blue-bg); color: var(--accent-blue); }
+        .status-pill.ready   { background: var(--accent-green-bg); color: var(--accent-green); }
+        .status-pill.error   { background: var(--accent-red-bg); color: var(--accent-red); }
         .status-dot {
-            width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+            width: 6px; height: 6px; border-radius: 50%; background: currentColor;
         }
-        #status-bar.loading .status-dot { animation: pulse 1s infinite; }
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+        .status-pill.loading .status-dot { animation: pulse 1s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.25} }
 
-        /* Backend badge */
-        #backend-badge { font-size: 0.7rem; color: #666; margin-bottom: 10px; }
-        #backend-badge span {
-            background: #1e1e2e; padding: 2px 8px; border-radius: 4px; font-family: monospace;
+        /* ── Viewfinder Card ─────────────────────── */
+        .viewfinder-card {
+            width: 100%;
+            max-width: 420px;
+            background: var(--bg-card);
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+        .viewfinder {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            background: #000;
+            overflow: hidden;
+        }
+        .viewfinder canvas,
+        .viewfinder video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .viewfinder img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: none;
         }
 
-        /* Webcam */
-        #webcam-container {
-            position: relative; margin: 10px auto; border-radius: 16px; overflow: hidden;
-            width: 300px; height: 300px; background: #000; border: 2px solid #2a2a2a;
+        /* Scanning overlay corners */
+        .scan-corners {
+            position: absolute;
+            inset: 20px;
+            pointer-events: none;
         }
-        #webcam-container canvas,
-        #webcam-container video { width: 100%; height: 100%; object-fit: cover; }
+        .scan-corners::before,
+        .scan-corners::after {
+            content: '';
+            position: absolute;
+            width: 24px;
+            height: 24px;
+            border-color: var(--accent-green);
+            border-style: solid;
+        }
+        .scan-corners::before {
+            top: 0; left: 0;
+            border-width: 2px 0 0 2px;
+            border-radius: 4px 0 0 0;
+        }
+        .scan-corners::after {
+            top: 0; right: 0;
+            border-width: 2px 2px 0 0;
+            border-radius: 0 4px 0 0;
+        }
+        .scan-corners-bottom {
+            position: absolute;
+            inset: 20px;
+            pointer-events: none;
+        }
+        .scan-corners-bottom::before,
+        .scan-corners-bottom::after {
+            content: '';
+            position: absolute;
+            width: 24px;
+            height: 24px;
+            border-color: var(--accent-green);
+            border-style: solid;
+        }
+        .scan-corners-bottom::before {
+            bottom: 0; left: 0;
+            border-width: 0 0 2px 2px;
+            border-radius: 0 0 0 4px;
+        }
+        .scan-corners-bottom::after {
+            bottom: 0; right: 0;
+            border-width: 0 2px 2px 0;
+            border-radius: 0 0 4px 0;
+        }
 
         /* Loading overlay */
-        #loading-overlay {
-            position: absolute; inset: 0;
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            background: rgba(0,0,0,0.85); z-index: 10; gap: 12px;
+        .loading-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0,0,0,0.8);
+            z-index: 10;
+            gap: 14px;
         }
-        #loading-overlay.hidden { display: none; }
+        .loading-overlay.hidden { display: none; }
         .spinner {
-            width: 40px; height: 40px; border: 3px solid #333; border-top-color: #4caf50;
-            border-radius: 50%; animation: spin 0.8s linear infinite;
+            width: 36px; height: 36px;
+            border: 3px solid #2a3a4a;
+            border-top-color: var(--accent-green);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
-        #loading-overlay p { font-size: 0.8rem; color: #aaa; }
+        .loading-overlay p { font-size: 0.8rem; color: var(--text-muted); }
 
-        /* Predictions */
-        #label-container { margin-top: 16px; }
-        .metric {
-            background: #1e1e1e; padding: 12px 16px; margin: 6px auto; max-width: 340px;
-            border-radius: 10px; display: flex; justify-content: space-between;
-            align-items: center; font-size: 0.95rem;
-            border-left: 3px solid #333; transition: border-color 0.3s;
+        /* Placeholder when no camera */
+        .camera-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            padding: 24px;
+            color: var(--text-muted);
+            text-align: center;
+            gap: 8px;
         }
-        .metric.top { border-left-color: #4caf50; background: #1b2e1b; }
-        .metric .class-name { text-align: left; flex: 1; }
-        .metric .confidence {
-            font-family: monospace; font-weight: bold; margin-left: 12px;
-            min-width: 65px; text-align: right;
+        .camera-placeholder .icon { font-size: 2.8rem; }
+        .camera-placeholder p { font-size: 0.82rem; line-height: 1.5; }
+
+        /* Upload zone inside viewfinder */
+        .upload-zone {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            padding: 32px;
+            text-align: center;
+            cursor: pointer;
+            border: 2px dashed var(--border);
+            margin: 16px;
+            border-radius: 12px;
+            transition: border-color 0.2s;
+            gap: 12px;
         }
-        .metric .bar-bg {
-            flex: 0 0 80px; height: 6px; background: #333; border-radius: 3px;
-            margin-left: 12px; overflow: hidden;
-        }
-        .metric .bar-fill {
-            height: 100%; background: #4caf50; border-radius: 3px; transition: width 0.2s ease;
+        .upload-zone:hover,
+        .upload-zone.dragover { border-color: var(--accent-blue); }
+        .upload-zone .icon { font-size: 3rem; }
+        .upload-zone p { font-size: 0.85rem; color: var(--text-muted); line-height: 1.4; }
+        .upload-zone .browse-link {
+            color: var(--accent-blue);
+            font-weight: 600;
+            text-decoration: underline;
         }
 
-        /* Upload fallback */
-        #upload-section { margin: 16px auto; max-width: 340px; }
-        #upload-btn {
-            display: inline-flex; align-items: center; gap: 8px;
-            padding: 12px 24px; background: #1e3a5f; color: #90caf9;
-            border: 1px solid #2a5a8f; border-radius: 10px;
-            font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: background 0.2s;
-        }
-        #upload-btn:hover  { background: #254a6f; }
-        #upload-btn:active { background: #1a2f4a; }
+        /* Hidden file input */
         #file-input { display: none; }
-        #preview-image { width: 100%; height: 100%; object-fit: cover; display: none; }
 
-        /* Error state */
-        #error-container {
-            display: none; margin: 20px auto; max-width: 340px; padding: 20px;
-            background: #2a1515; border-radius: 12px; border: 1px solid #5a2020;
+        /* ── Diagnosis Result Card ───────────────── */
+        .result-card {
+            width: 100%;
+            max-width: 420px;
+            margin-top: 16px;
+            background: var(--bg-card);
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            padding: 24px 20px;
+            text-align: center;
+            display: none;
         }
-        #error-container h3 { color: #ef5350; margin-bottom: 8px; font-size: 1rem; }
-        #error-container p  { font-size: 0.85rem; color: #ccc; line-height: 1.4; }
-        #retry-btn {
-            margin-top: 12px; padding: 10px 28px; background: #4caf50; color: #fff;
-            border: none; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer;
-        }
-        #retry-btn:active { background: #388e3c; }
+        .result-card.visible { display: block; }
 
-        footer { margin-top: 28px; font-size: 0.7rem; color: #555; }
+        .result-label-small {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+        }
+
+        .diagnosis-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 28px;
+            border-radius: 50px;
+            font-size: 1.15rem;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+        }
+        .diagnosis-badge .badge-icon { font-size: 1.3rem; }
+
+        .diagnosis-badge.healthy {
+            background: var(--accent-green-bg);
+            color: var(--accent-green);
+            border: 1px solid rgba(16, 185, 129, 0.25);
+        }
+        .diagnosis-badge.leaf-miner {
+            background: var(--accent-amber-bg);
+            color: var(--accent-amber);
+            border: 1px solid rgba(245, 158, 11, 0.25);
+        }
+        .diagnosis-badge.late-blight {
+            background: var(--accent-red-bg);
+            color: var(--accent-red);
+            border: 1px solid rgba(239, 68, 68, 0.25);
+        }
+        .diagnosis-badge.unknown {
+            background: var(--accent-blue-bg);
+            color: var(--accent-blue);
+            border: 1px solid rgba(59, 130, 246, 0.25);
+        }
+
+        .diagnosis-hint {
+            margin-top: 14px;
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+
+        /* ── Retake Button ───────────────────────── */
+        .retake-btn {
+            display: none;
+            width: 100%;
+            max-width: 420px;
+            margin-top: 12px;
+            padding: 16px;
+            background: var(--bg-card-alt);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .retake-btn:hover  { background: #243040; }
+        .retake-btn:active { transform: scale(0.98); }
+
+        /* ── Error Card ──────────────────────────── */
+        .error-card {
+            display: none;
+            width: 100%;
+            max-width: 420px;
+            margin-top: 16px;
+            padding: 24px 20px;
+            background: var(--accent-red-bg);
+            border: 1px solid rgba(239, 68, 68, 0.25);
+            border-radius: var(--radius);
+            text-align: center;
+        }
+        .error-card h3 { color: var(--accent-red); font-size: 1rem; margin-bottom: 8px; }
+        .error-card p { font-size: 0.82rem; color: var(--text-primary); line-height: 1.4; }
+        .error-card button {
+            margin-top: 14px;
+            padding: 12px 28px;
+            background: var(--accent-red);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        /* ── Backend info ────────────────────────── */
+        .backend-info {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            margin-top: 20px;
+            opacity: 0.6;
+        }
+        .backend-info code {
+            background: var(--bg-card);
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 0.65rem;
+        }
+
+        /* ── Footer ──────────────────────────────── */
+        footer {
+            margin-top: 24px;
+            font-size: 0.68rem;
+            color: var(--text-muted);
+            opacity: 0.5;
+        }
     </style>
 </head>
 <body>
-    <header>
-        <h1>🌿 Edge-AI Crop Diagnostics</h1>
-        <p>Point camera at a tomato leaf specimen</p>
+
+    <header class="app-header">
+        <h1>🌿 Crop Diagnostics</h1>
+        <p class="subtitle">On-device AI &middot; Works offline</p>
     </header>
 
-    <div id="status-bar" class="loading">
+    <!-- Mode Toggle -->
+    <div class="mode-toggle">
+        <button class="mode-btn active" id="btn-camera" onclick="switchMode('camera')">
+            📷 Live Camera
+        </button>
+        <button class="mode-btn" id="btn-upload" onclick="switchMode('upload')">
+            📁 Upload Photo
+        </button>
+    </div>
+
+    <!-- Status -->
+    <div class="status-pill loading" id="status-pill">
         <span class="status-dot"></span>
         <span id="status-text">Loading model…</span>
     </div>
 
-    <div id="backend-badge"></div>
+    <!-- Viewfinder -->
+    <div class="viewfinder-card">
+        <div class="viewfinder" id="viewfinder">
+            <div class="loading-overlay" id="loading-overlay">
+                <div class="spinner"></div>
+                <p id="loading-msg">Initializing…</p>
+            </div>
+            <div class="scan-corners"></div>
+            <div class="scan-corners-bottom"></div>
+            <img id="preview-image" alt="Uploaded leaf">
 
-    <div id="webcam-container">
-        <div id="loading-overlay">
-            <div class="spinner"></div>
-            <p>Initializing…</p>
+            <!-- Upload drop zone (shown in upload mode) -->
+            <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
+                <span class="icon">📄</span>
+                <p>Tap to select a photo<br>or <span class="browse-link">browse files</span></p>
+                <p style="font-size:0.72rem; color:#556;">Supports JPG, PNG, HEIC</p>
+            </div>
         </div>
-        <img id="preview-image" alt="Uploaded leaf image">
     </div>
 
-    <div id="upload-section">
-        <input type="file" id="file-input" accept="image/*" capture="environment">
-        <button id="upload-btn" onclick="document.getElementById('file-input').click()">
-            📷 Upload or Take Photo
-        </button>
+    <input type="file" id="file-input" accept="image/*" capture="environment">
+
+    <!-- Diagnosis Result -->
+    <div class="result-card" id="result-card">
+        <div class="result-label-small">Diagnosis</div>
+        <div class="diagnosis-badge" id="diagnosis-badge">
+            <span class="badge-icon"></span>
+            <span class="badge-text"></span>
+        </div>
+        <p class="diagnosis-hint" id="diagnosis-hint"></p>
     </div>
 
-    <div id="label-container"></div>
+    <!-- Retake / Back to Camera -->
+    <button class="retake-btn" id="retake-btn" onclick="handleRetake()">
+        🔄 Retake / Back to Camera
+    </button>
 
-    <div id="error-container">
+    <!-- Error -->
+    <div class="error-card" id="error-card">
         <h3>⚠️ Something went wrong</h3>
         <p id="error-message"></p>
-        <button id="retry-btn" onclick="location.reload()">Retry</button>
+        <button onclick="location.reload()">Retry</button>
     </div>
 
+    <div class="backend-info" id="backend-info"></div>
+
     <footer>
-        Runs entirely on-device &middot; No data leaves your phone
+        100% on-device &middot; No data leaves your phone
     </footer>
 
-    <!-- LOCAL libraries — zero CDN dependencies -->
+    <!-- LOCAL libraries — zero CDN -->
     <script src="./libs/tf.min.js"></script>
     <script src="./libs/wasm/tf-backend-wasm.min.js"></script>
     <script src="./libs/teachablemachine-image.min.js"></script>
