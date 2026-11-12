@@ -1,7 +1,8 @@
 // ── Configuration ────────────────────────────────────────────
 const MODEL_DIR = "./quantized_model/";
+const WASM_DIR  = "./libs/wasm/";
 const WEBCAM_SIZE = 300;
-const PREDICTION_THROTTLE_MS = 100; // Cap inference rate for battery savings
+const PREDICTION_THROTTLE_MS = 100;
 
 // ── State ────────────────────────────────────────────────────
 let model, webcam, labelContainer, maxPredictions;
@@ -13,16 +14,15 @@ let cameraAvailable = false;
 function setStatus(text, state = "loading") {
     const bar = document.getElementById("status-bar");
     const label = document.getElementById("status-text");
-    bar.className = state; // "loading" | "ready" | "error"
+    bar.className = state;
     label.textContent = text;
 }
 
 function showError(message) {
     setStatus("Error", "error");
     document.getElementById("loading-overlay").classList.add("hidden");
-    const errBox = document.getElementById("error-container");
     document.getElementById("error-message").textContent = message;
-    errBox.style.display = "block";
+    document.getElementById("error-container").style.display = "block";
 }
 
 function showBackend(name) {
@@ -34,7 +34,7 @@ function showBackend(name) {
 async function initBackend() {
     await tf.ready();
 
-    // Try WebGL first (GPU-accelerated)
+    // 1. Try WebGL (GPU-accelerated)
     try {
         await tf.setBackend("webgl");
         await tf.ready();
@@ -45,21 +45,23 @@ async function initBackend() {
         console.warn("WebGL unavailable:", e.message);
     }
 
-    // Try WASM (good perf on older devices)
+    // 2. Try WASM — point it to local .wasm binaries
     try {
-        if (window.tf && tf.wasm && typeof tf.wasm.setWasmPaths === "function") {
-            tf.wasm.setWasmPaths("./libs/");
+        if (typeof tf.wasm !== "undefined" && tf.wasm.setWasmPaths) {
+            tf.wasm.setWasmPaths(WASM_DIR);
+        } else if (typeof tf.setWasmPaths === "function") {
+            tf.setWasmPaths(WASM_DIR);
         }
         await tf.setBackend("wasm");
         await tf.ready();
         showBackend("wasm");
-        console.log("Using WASM backend (local ./libs/)");
+        console.log("Using WASM backend");
         return;
     } catch (e) {
         console.warn("WASM unavailable:", e.message);
     }
 
-    // CPU fallback (always available)
+    // 3. CPU fallback
     await tf.setBackend("cpu");
     await tf.ready();
     showBackend("cpu");
@@ -71,7 +73,6 @@ async function initWebcam() {
     const flip = true;
     webcam = new tmImage.Webcam(WEBCAM_SIZE, WEBCAM_SIZE, flip);
 
-    // Try rear camera first, fall back to any available camera
     try {
         await webcam.setup({ facingMode: "environment" });
     } catch (e) {
@@ -85,9 +86,7 @@ async function initWebcam() {
 
 // ── Prediction Rendering ─────────────────────────────────────
 function renderPredictions(predictions) {
-    // Find the top prediction index
-    let topIdx = 0;
-    let topProb = 0;
+    let topIdx = 0, topProb = 0;
     for (let i = 0; i < predictions.length; i++) {
         if (predictions[i].probability > topProb) {
             topProb = predictions[i].probability;
@@ -99,23 +98,18 @@ function renderPredictions(predictions) {
         const pct = (predictions[i].probability * 100).toFixed(1);
         const el = labelContainer.children[i];
         if (!el) continue;
-
         el.className = i === topIdx ? "metric top" : "metric";
         el.innerHTML = `
             <span class="class-name">${predictions[i].className}</span>
             <span class="bar-bg"><span class="bar-fill" style="width:${pct}%"></span></span>
-            <span class="confidence">${pct}%</span>
-        `;
+            <span class="confidence">${pct}%</span>`;
     }
 }
 
 // ── Inference Loop (camera mode) ─────────────────────────────
 async function loop(timestamp) {
     if (!isRunning) return;
-
     webcam.update();
-
-    // Throttle predictions to save battery
     if (timestamp - lastPredictionTime >= PREDICTION_THROTTLE_MS) {
         lastPredictionTime = timestamp;
         try {
@@ -125,7 +119,6 @@ async function loop(timestamp) {
             console.error("Prediction error:", e);
         }
     }
-
     window.requestAnimationFrame(loop);
 }
 
@@ -140,8 +133,6 @@ function setupFileUpload() {
 
         const preview = document.getElementById("preview-image");
         const container = document.getElementById("webcam-container");
-
-        // Hide webcam canvas if present, show uploaded image
         const existingCanvas = container.querySelector("canvas");
         if (existingCanvas) existingCanvas.style.display = "none";
 
@@ -150,23 +141,15 @@ function setupFileUpload() {
 
         preview.onload = async () => {
             setStatus("Analyzing…", "loading");
-
-            // Draw image to a canvas for prediction
             const canvas = document.createElement("canvas");
             canvas.width = WEBCAM_SIZE;
             canvas.height = WEBCAM_SIZE;
             const ctx = canvas.getContext("2d");
 
-            // Center-crop to square
             const aspect = preview.naturalWidth / preview.naturalHeight;
             let sx = 0, sy = 0, sw = preview.naturalWidth, sh = preview.naturalHeight;
-            if (aspect > 1) {
-                sx = (sw - sh) / 2;
-                sw = sh;
-            } else {
-                sy = (sh - sw) / 2;
-                sh = sw;
-            }
+            if (aspect > 1) { sx = (sw - sh) / 2; sw = sh; }
+            else             { sy = (sh - sw) / 2; sh = sw; }
             ctx.drawImage(preview, sx, sy, sw, sh, 0, 0, WEBCAM_SIZE, WEBCAM_SIZE);
 
             try {
@@ -177,11 +160,8 @@ function setupFileUpload() {
                 console.error("Upload prediction error:", err);
                 setStatus("Prediction failed", "error");
             }
-
             window.URL.revokeObjectURL(preview.src);
         };
-
-        // Reset input so the same file can be re-selected
         fileInput.value = "";
     });
 }
@@ -203,24 +183,16 @@ function buildPredictionSlots() {
 // ── Main Init ────────────────────────────────────────────────
 async function init() {
     try {
-        // 1. Set up TF.js backend
         setStatus("Setting up AI engine…", "loading");
         await initBackend();
 
-        // 2. Load the model
         setStatus("Loading model…", "loading");
-        const modelURL = MODEL_DIR + "model.json";
-        const metadataURL = MODEL_DIR + "metadata.json";
-        model = await tmImage.load(modelURL, metadataURL);
+        model = await tmImage.load(MODEL_DIR + "model.json", MODEL_DIR + "metadata.json");
         maxPredictions = model.getTotalClasses();
 
-        // 3. Build prediction UI slots
         buildPredictionSlots();
-
-        // 4. Always wire up file upload as a fallback
         setupFileUpload();
 
-        // 5. Try starting the camera
         setStatus("Starting camera…", "loading");
         try {
             await initWebcam();
@@ -230,45 +202,29 @@ async function init() {
             isRunning = true;
             window.requestAnimationFrame(loop);
         } catch (camErr) {
-            // Camera failed — fall back to upload-only mode
             cameraAvailable = false;
             console.warn("Camera unavailable:", camErr.message);
             document.getElementById("loading-overlay").classList.add("hidden");
-
-            // Show helpful context in the webcam area
-            const container = document.getElementById("webcam-container");
-            container.innerHTML = `
+            document.getElementById("webcam-container").innerHTML = `
                 <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:20px;color:#888;">
                     <div style="font-size:2.5rem;margin-bottom:10px;">📷</div>
                     <div style="font-size:0.85rem;line-height:1.4;">
                         Camera not available.<br>
                         Use the button below to<br>upload or take a photo.
                     </div>
-                </div>
-            `;
-
-            let reason = "Camera is not accessible.";
-            if (location.protocol === "http:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
-                reason += " You're on HTTP — camera requires HTTPS or localhost.";
-            }
-
+                </div>`;
             setStatus("Upload mode", "ready");
-            console.info("Running in upload-only mode.", reason);
         }
-
     } catch (err) {
         console.error("Init failed:", err);
-        let userMsg = err.message || "Unknown error";
-
-        if (userMsg.includes("model.json") || userMsg.includes("404")) {
-            userMsg = "Model files not found. Make sure the quantized_model/ folder contains model.json, metadata.json, and weights.bin.";
-        }
-
-        showError(userMsg);
+        let msg = err.message || "Unknown error";
+        if (msg.includes("model.json") || msg.includes("404"))
+            msg = "Model files not found. Ensure quantized_model/ contains model.json, metadata.json, and weights.bin.";
+        showError(msg);
     }
 }
 
-// Handle visibility changes — pause/resume to save resources
+// Pause/resume on visibility change
 document.addEventListener("visibilitychange", () => {
     if (!cameraAvailable) return;
     if (document.hidden) {
@@ -281,5 +237,4 @@ document.addEventListener("visibilitychange", () => {
     }
 });
 
-// Auto-initialize on load
 window.addEventListener("load", init);

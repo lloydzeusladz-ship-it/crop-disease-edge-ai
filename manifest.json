@@ -1,17 +1,14 @@
 {
   "name": "Edge-AI Crop Diagnostics",
   "short_name": "CropAI",
-  "description": "Offline crop disease detection running entirely on-device with zero external dependencies.",
+  "description": "100% offline crop disease detection — on-device AI, zero cloud dependencies",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#121212",
   "theme_color": "#121212",
-  "categories": [
-    "agriculture",
-    "utilities"
-  ],
+  "categories": ["agriculture", "utilities"],
   "icons": [
     {
       "src": "./icon.svg",

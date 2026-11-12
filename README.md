@@ -1,74 +1,54 @@
-# 🌿 Edge-AI Crop Disease Detector (100% Offline PWA)
+# 🌿 Edge-AI Crop Disease Detector
 
-A fully autonomous, offline-capable Progressive Web App (PWA) designed to detect crop diseases directly in the browser using on-device machine learning (TensorFlow.js + Teachable Machine).
+A **100% offline** Progressive Web App that detects crop diseases using on-device AI. After the first load, **zero network requests** are needed — every dependency is bundled locally.
 
-## Key Architecture & Features
-
-- **100% Offline & Serverless**: Zero external CDN calls or remote APIs. Once loaded or installed as a PWA, it operates completely disconnected from the internet.
-- **Local Libraries (`/libs`)**: Contains all runtime dependencies locally (`tf.min.js`, `tf-backend-wasm.min.js`, `teachablemachine-image.min.js`, and WASM binaries).
-- **Flexible Hardware Acceleration**:
-  - Primary: **WebGL** (GPU-accelerated)
-  - Secondary fallback: **WASM** with SIMD support (high performance on older mobile chipsets)
-  - Ultimate fallback: **CPU**
-- **Autonomous Service Worker (`sw.js`)**: Employs an aggressive Cache-First strategy that pre-caches the application shell, libraries, and model weights during installation.
-- **Relative Path Resolution (`./`)**: Portable across root domains and subdirectory hosting (e.g. GitHub Pages `https://username.github.io/repository/`).
-- **Camera & Photo Fallback**: Live environment camera stream with automated fallback to file/photo upload on unsupported hardware or restricted permission environments.
-
----
-
-## Directory Structure
+## Architecture
 
 ```
 crop-disease-edge-ai/
-├── index.html                   # Autonomous PWA Shell
-├── app.js                       # Hardware fallback, camera & inference logic
-├── manifest.json                # PWA installation manifest (relative paths)
-├── sw.js                        # Cache-first Service Worker
-├── icon.svg                     # Scalable application icon
-├── icon-192.png                 # Standard PWA launcher icon
-├── icon-512.png                 # High-resolution splash icon
-├── libs/                        # 100% Local runtime dependencies
-│   ├── tf.min.js
-│   ├── tf-backend-wasm.min.js
-│   ├── teachablemachine-image.min.js
-│   ├── tfjs-backend-wasm.wasm
-│   ├── tfjs-backend-wasm-simd.wasm
-│   └── tfjs-backend-wasm-threaded-simd.wasm
-└── quantized_model/             # Pre-trained edge model assets
-    ├── metadata.json
-    ├── model.json
-    └── weights.bin
+├── index.html                    ← App shell (zero CDN links)
+├── app.js                        ← Inference engine + WebGL/WASM/CPU fallback
+├── sw.js                         ← Service Worker (pre-caches everything)
+├── manifest.json                 ← PWA install manifest
+├── icon.svg                      ← App icon
+├── libs/
+│   ├── tf.min.js                 ← TensorFlow.js 4.22.0
+│   ├── teachablemachine-image.min.js  ← Teachable Machine 0.8.5
+│   └── wasm/
+│       ├── tf-backend-wasm.min.js
+│       ├── tfjs-backend-wasm.wasm
+│       ├── tfjs-backend-wasm-simd.wasm
+│       └── tfjs-backend-wasm-threaded-simd.wasm
+├── quantized_model/
+│   ├── model.json
+│   ├── metadata.json
+│   └── weights.bin
+└── generate_assets.py            ← PNG icons + QR code generator
 ```
 
----
+**Zero external CDN links.** Every script and binary is in `/libs`.
 
-## Deploying to GitHub Pages (HTTPS)
+## Deploy to GitHub Pages
 
-Because modern browsers require a secure context (HTTPS) for Service Workers and Camera APIs, GitHub Pages is the simplest hosting target:
+1. Push this repo to a **public** GitHub repository.
+2. Go to **Settings → Pages → Deploy from branch → `main`** → Save.
+3. Open `https://<you>.github.io/crop-disease-edge-ai/` on any device.
+4. After the first visit, the app works **fully offline** — airplane mode, no Wi-Fi, anywhere.
 
-1. **Create Repository**: Create a public GitHub repository (e.g. `crop-disease-edge-ai`).
-2. **Push Code**: Commit and push all files in this directory to the `main` branch:
-   ```bash
-   git init
-   git add .
-   git commit -m "Deploy 100% offline crop disease PWA"
-   git branch -M main
-   git remote add origin https://github.com/<your-username>/crop-disease-edge-ai.git
-   git push -u origin main
-   ```
-3. **Enable GitHub Pages**:
-   - Go to your repository **Settings** → **Pages**.
-   - Under **Build and deployment**, set Source to **Deploy from a branch**.
-   - Select Branch: `main` and folder: `/ (root)`.
-   - Click **Save**.
-4. **Access the Application**:
-   - Open `https://<your-username>.github.io/crop-disease-edge-ai/` on your mobile phone or tablet.
-   - Once the page loads, the Service Worker pre-caches all libraries and model files into browser storage.
-   - You can test offline mode by switching your phone to **Airplane Mode** and refreshing the page or launching it from your home screen.
+## How It Works
 
----
+1. **First visit** — the Service Worker caches `index.html`, all scripts in `/libs`, and all model files.
+2. **Every subsequent visit** — everything is served from cache. Zero network needed.
+3. **Inference** — runs on WebGL (GPU) by default, falls back to WASM then CPU on older devices.
+4. **Camera** — uses rear camera for live scanning; falls back to file upload if camera is blocked.
 
-## Installing as a PWA
+## Generate Icons & QR Code
 
-- **Android (Chrome / Edge / Samsung Internet)**: Tap the three dots menu → **Add to Home screen** (or tap the **Install App** prompt).
-- **iOS (Safari)**: Tap the Share button → **Add to Home Screen**.
+```bash
+pip install Pillow qrcode[pil]
+python generate_assets.py --url https://<you>.github.io/crop-disease-edge-ai/
+```
+
+## License
+
+MIT
