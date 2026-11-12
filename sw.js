@@ -1,7 +1,7 @@
 // ── sw.js — Service Worker for 100% offline operation ────────
 // Pre-caches every asset on install. No network requests needed after first load.
 
-const CACHE_NAME = "crop-ai-offline-v1";
+const CACHE_NAME = "crop-ai-offline-v2";
 
 // Every file the app needs — all local, zero CDN
 const PRECACHE_ASSETS = [

@@ -1,19 +1,17 @@
 // ═══════════════════════════════════════════════════════════════
 //  Edge-AI Crop Diagnostics — app.js
-//  Fixes: 224×224 center-crop preprocessing for uploads,
-//         correct class-index mapping, seamless mode switching.
+//  v3: Proper MediaStream lifecycle, decoupled camera/upload,
+//      clean destroy/recreate on every transition.
 // ═══════════════════════════════════════════════════════════════
 
 // ── Config ───────────────────────────────────────────────────
 const MODEL_DIR   = "./quantized_model/";
 const WASM_DIR    = "./libs/wasm/";
 const MODEL_INPUT = 224;       // MobileNetV2 expects 224×224
-const WEBCAM_SIZE = 300;       // Display size (rendered, not inference size)
+const WEBCAM_SIZE = 300;       // Display size
 const THROTTLE_MS = 150;
 
 // ── Class Styling Map ────────────────────────────────────────
-// Maps className from metadata.json → UI style.
-// Order does NOT matter here — we match by className string.
 const CLASS_STYLES = {
     "Healthy": {
         cssClass: "healthy",
@@ -40,12 +38,13 @@ const DEFAULT_STYLE = {
 
 // ── State ────────────────────────────────────────────────────
 let model = null;
-let webcam = null;
+let webcam = null;              // tmImage.Webcam instance (or null)
+let activeStream = null;        // Raw MediaStream — we track this ourselves
+let animFrameId = null;         // rAF handle so we can cancel cleanly
 let isRunning = false;
-let cameraAvailable = false;
-let cameraStarted = false;
-let currentMode = "camera";    // "camera" | "upload"
+let currentMode = "camera";     // "camera" | "upload"
 let lastPredTime = 0;
+let modelReady = false;
 
 // Reusable offscreen canvas for preprocessing uploads
 const inferCanvas = document.createElement("canvas");
@@ -54,95 +53,63 @@ inferCanvas.height = MODEL_INPUT;
 const inferCtx = inferCanvas.getContext("2d");
 
 // ── DOM References ───────────────────────────────────────────
-const $status      = () => document.getElementById("status-pill");
-const $statusText  = () => document.getElementById("status-text");
-const $loadingMsg  = () => document.getElementById("loading-msg");
-const $overlay     = () => document.getElementById("loading-overlay");
-const $viewfinder  = () => document.getElementById("viewfinder");
-const $preview     = () => document.getElementById("preview-image");
-const $uploadZone  = () => document.getElementById("upload-zone");
-const $fileInput   = () => document.getElementById("file-input");
-const $resultCard  = () => document.getElementById("result-card");
-const $badge       = () => document.getElementById("diagnosis-badge");
-const $hint        = () => document.getElementById("diagnosis-hint");
-const $retakeBtn   = () => document.getElementById("retake-btn");
-const $errorCard   = () => document.getElementById("error-card");
-const $errorMsg    = () => document.getElementById("error-message");
-const $backendInfo = () => document.getElementById("backend-info");
-const $btnCamera   = () => document.getElementById("btn-camera");
-const $btnUpload   = () => document.getElementById("btn-upload");
+const $ = (id) => document.getElementById(id);
 
 // ── UI Helpers ───────────────────────────────────────────────
 function setStatus(text, state) {
-    const pill = $status();
+    const pill = $("status-pill");
     pill.className = "status-pill " + state;
-    $statusText().textContent = text;
+    $("status-text").textContent = text;
 }
 
 function showError(message) {
     setStatus("Error", "error");
-    $overlay().classList.add("hidden");
-    $errorMsg().textContent = message;
-    $errorCard().style.display = "block";
+    $("loading-overlay").classList.add("hidden");
+    $("error-message").textContent = message;
+    $("error-card").style.display = "block";
 }
 
 function hideError() {
-    $errorCard().style.display = "none";
+    $("error-card").style.display = "none";
 }
 
 // ── Backend Init (WebGL → WASM → CPU) ───────────────────────
 async function initBackend() {
     await tf.ready();
 
-    // Try WebGL
     try {
         await tf.setBackend("webgl");
         await tf.ready();
-        $backendInfo().innerHTML = "Backend: <code>WebGL</code>";
+        $("backend-info").innerHTML = "Backend: <code>WebGL</code>";
         return;
     } catch (e) {
         console.warn("WebGL unavailable:", e.message);
     }
 
-    // Try WASM with local binaries
     try {
-        if (tf.wasm && tf.wasm.setWasmPaths) {
-            tf.wasm.setWasmPaths(WASM_DIR);
-        } else if (tf.setWasmPaths) {
-            tf.setWasmPaths(WASM_DIR);
-        }
+        if (tf.wasm && tf.wasm.setWasmPaths) tf.wasm.setWasmPaths(WASM_DIR);
+        else if (tf.setWasmPaths) tf.setWasmPaths(WASM_DIR);
         await tf.setBackend("wasm");
         await tf.ready();
-        $backendInfo().innerHTML = "Backend: <code>WASM</code>";
+        $("backend-info").innerHTML = "Backend: <code>WASM</code>";
         return;
     } catch (e) {
         console.warn("WASM unavailable:", e.message);
     }
 
-    // CPU fallback
     await tf.setBackend("cpu");
     await tf.ready();
-    $backendInfo().innerHTML = "Backend: <code>CPU</code>";
+    $("backend-info").innerHTML = "Backend: <code>CPU</code>";
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  PREPROCESSING — The critical fix for upload misclassification
+//  PREPROCESSING
 // ═══════════════════════════════════════════════════════════════
 
-/**
- * Center-crop an image/canvas into a 224×224 canvas for model input.
- * This matches the preprocessing that the Teachable Machine webcam
- * applies internally, preventing the model from seeing distorted
- * aspect ratios that bias toward Late Blight.
- *
- * @param {HTMLImageElement|HTMLCanvasElement} source
- * @returns {HTMLCanvasElement} 224×224 canvas ready for model.predict()
- */
 function preprocessForModel(source) {
     const sw = source.naturalWidth  || source.width;
     const sh = source.naturalHeight || source.height;
 
-    // Center-crop to square (take the largest centered square)
     let sx, sy, cropSize;
     if (sw > sh) {
         cropSize = sh;
@@ -154,10 +121,8 @@ function preprocessForModel(source) {
         sy = Math.floor((sh - sw) / 2);
     }
 
-    // Draw cropped region scaled to 224×224
     inferCtx.clearRect(0, 0, MODEL_INPUT, MODEL_INPUT);
     inferCtx.drawImage(source, sx, sy, cropSize, cropSize, 0, 0, MODEL_INPUT, MODEL_INPUT);
-
     return inferCanvas;
 }
 
@@ -165,114 +130,148 @@ function preprocessForModel(source) {
 //  DIAGNOSIS RENDERING
 // ═══════════════════════════════════════════════════════════════
 
-/**
- * Given the prediction array from model.predict(), find the top
- * class and render the diagnosis badge. No percentages, no bars.
- *
- * The prediction array indices match metadata.json "labels" order:
- *   [0] = "Healthy"
- *   [1] = "Leaf Miner Infestation"
- *   [2] = "Late Blight"
- *
- * We match by className string (not index) for safety.
- */
 function renderDiagnosis(predictions) {
-    // Find top prediction
     let top = predictions[0];
     for (let i = 1; i < predictions.length; i++) {
-        if (predictions[i].probability > top.probability) {
-            top = predictions[i];
-        }
+        if (predictions[i].probability > top.probability) top = predictions[i];
     }
 
     const style = CLASS_STYLES[top.className] || DEFAULT_STYLE;
-
-    const badge = $badge();
+    const badge = $("diagnosis-badge");
     badge.className = "diagnosis-badge " + style.cssClass;
     badge.querySelector(".badge-icon").textContent = style.icon;
     badge.querySelector(".badge-text").textContent = top.className;
-
-    $hint().textContent = style.hint;
-
-    const card = $resultCard();
-    card.classList.add("visible");
+    $("diagnosis-hint").textContent = style.hint;
+    $("result-card").classList.add("visible");
 }
 
 function hideDiagnosis() {
-    $resultCard().classList.remove("visible");
+    $("result-card").classList.remove("visible");
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  CAMERA MODE
+//  CAMERA — Full destroy/recreate lifecycle
 // ═══════════════════════════════════════════════════════════════
 
-async function startCamera() {
-    if (cameraStarted && webcam) {
-        // Re-show existing webcam canvas
-        const existing = $viewfinder().querySelector("canvas");
-        if (existing) existing.style.display = "block";
-        await webcam.play();
-        isRunning = true;
-        window.requestAnimationFrame(cameraLoop);
-        return;
+/**
+ * Completely destroys the current webcam instance and releases
+ * all hardware resources. After this call, webcam === null and
+ * no MediaStream tracks are running.
+ */
+function destroyCamera() {
+    // 1. Stop the inference loop
+    isRunning = false;
+    if (animFrameId) {
+        cancelAnimationFrame(animFrameId);
+        animFrameId = null;
     }
+
+    // 2. Stop the tmImage.Webcam (calls its internal stream.stop)
+    if (webcam) {
+        try { webcam.stop(); } catch (e) { /* already stopped */ }
+        webcam = null;
+    }
+
+    // 3. Explicitly kill every raw MediaStream track
+    //    This is the critical fix — tmImage.Webcam.stop() does NOT
+    //    always release tracks on all browsers (especially mobile).
+    if (activeStream) {
+        activeStream.getTracks().forEach((track) => {
+            track.stop();
+            console.log("[Camera] Track stopped:", track.kind, track.label);
+        });
+        activeStream = null;
+    }
+
+    // 4. Remove the canvas element from the DOM
+    const vf = $("viewfinder");
+    const canvas = vf.querySelector("canvas");
+    if (canvas) {
+        canvas.remove();
+    }
+
+    console.log("[Camera] Fully destroyed");
+}
+
+/**
+ * Creates a brand-new webcam instance, requests getUserMedia,
+ * and starts the inference loop. Always creates fresh — never
+ * reuses a stale webcam object.
+ */
+async function createCamera() {
+    // Always start clean
+    destroyCamera();
 
     const flip = true;
     webcam = new tmImage.Webcam(WEBCAM_SIZE, WEBCAM_SIZE, flip);
 
+    // Request camera stream (this triggers the permission prompt)
     try {
         await webcam.setup({ facingMode: "environment" });
     } catch (e) {
-        console.warn("Rear camera failed, trying default:", e.message);
-        await webcam.setup();
+        console.warn("Rear camera failed, trying any camera:", e.message);
+        await webcam.setup(); // Falls back to front camera
+    }
+
+    // Grab the raw MediaStream so we can manage tracks ourselves
+    if (webcam.webcam && webcam.webcam.srcObject) {
+        activeStream = webcam.webcam.srcObject;
+    } else if (webcam.canvas) {
+        // Some versions of tmImage store the stream differently
+        const video = $("viewfinder").querySelector("video");
+        if (video && video.srcObject) activeStream = video.srcObject;
     }
 
     await webcam.play();
-    $viewfinder().appendChild(webcam.canvas);
-    cameraStarted = true;
-    cameraAvailable = true;
-    isRunning = true;
-    window.requestAnimationFrame(cameraLoop);
-}
+    $("viewfinder").appendChild(webcam.canvas);
 
-function stopCamera() {
-    isRunning = false;
-    if (webcam) {
-        webcam.stop();
-        const canvas = $viewfinder().querySelector("canvas");
-        if (canvas) canvas.style.display = "none";
-    }
+    // Hide placeholder if it exists
+    const ph = $("viewfinder").querySelector(".camera-placeholder");
+    if (ph) ph.style.display = "none";
+
+    console.log("[Camera] Created and playing, tracks:",
+        activeStream ? activeStream.getTracks().length : "unknown");
+
+    // Start inference loop
+    isRunning = true;
+    lastPredTime = 0;
+    animFrameId = requestAnimationFrame(cameraLoop);
 }
 
 async function cameraLoop(timestamp) {
     if (!isRunning) return;
+
     webcam.update();
 
     if (timestamp - lastPredTime >= THROTTLE_MS) {
         lastPredTime = timestamp;
         try {
-            // Webcam canvas is already square — Teachable Machine handles
-            // its own 224×224 resize internally for webcam frames
             const predictions = await model.predict(webcam.canvas);
             renderDiagnosis(predictions);
         } catch (e) {
             console.error("Camera prediction error:", e);
         }
     }
-    window.requestAnimationFrame(cameraLoop);
+
+    animFrameId = requestAnimationFrame(cameraLoop);
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  UPLOAD MODE
+//  UPLOAD MODE — Completely decoupled from camera
 // ═══════════════════════════════════════════════════════════════
 
 function setupFileUpload() {
-    const fileInput = $fileInput();
-    const zone = $uploadZone();
+    const fileInput = $("file-input");
+    const zone = $("upload-zone");
 
-    fileInput.addEventListener("change", handleFileSelect);
+    // File input change — NO camera permission triggered here
+    fileInput.addEventListener("change", (e) => {
+        const file = e.target.files[0];
+        if (file) processFile(file);
+        e.target.value = "";
+    });
 
-    // Drag-and-drop support
+    // Drag-and-drop
     zone.addEventListener("dragover", (e) => {
         e.preventDefault();
         zone.classList.add("dragover");
@@ -281,25 +280,16 @@ function setupFileUpload() {
     zone.addEventListener("drop", (e) => {
         e.preventDefault();
         zone.classList.remove("dragover");
-        if (e.dataTransfer.files.length > 0) {
-            processFile(e.dataTransfer.files[0]);
-        }
+        if (e.dataTransfer.files.length > 0) processFile(e.dataTransfer.files[0]);
     });
-}
-
-function handleFileSelect(e) {
-    const file = e.target.files[0];
-    if (file) processFile(file);
-    e.target.value = ""; // Allow re-selecting same file
 }
 
 async function processFile(file) {
     if (!model) return;
 
-    const preview = $preview();
-    const zone = $uploadZone();
+    const preview = $("preview-image");
+    const zone = $("upload-zone");
 
-    // Hide upload zone, show preview
     zone.style.display = "none";
     preview.style.display = "block";
 
@@ -308,9 +298,7 @@ async function processFile(file) {
 
     preview.onload = async () => {
         setStatus("Analyzing…", "loading");
-
         try {
-            // ★ Critical fix: center-crop to 224×224 before inference
             const preprocessed = preprocessForModel(preview);
             const predictions = await model.predict(preprocessed);
             renderDiagnosis(predictions);
@@ -319,9 +307,8 @@ async function processFile(file) {
             console.error("Upload prediction error:", err);
             setStatus("Analysis failed", "error");
         }
-
         URL.revokeObjectURL(objectURL);
-        $retakeBtn().style.display = "block";
+        $("retake-btn").style.display = "block";
     };
 
     preview.onerror = () => {
@@ -331,129 +318,187 @@ async function processFile(file) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  MODE SWITCHING
+//  MODE SWITCHING — Clean state machine
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * Switches between "camera" and "upload" mode.
+ *
+ * Key invariants:
+ *   - Upload mode NEVER triggers getUserMedia
+ *   - Camera mode ALWAYS creates a fresh stream
+ *   - Switching to upload ALWAYS destroys the camera stream
+ *   - No camera runs in the background during upload mode
+ */
 function switchMode(mode) {
     if (mode === currentMode) return;
     currentMode = mode;
 
-    const preview = $preview();
-    const zone = $uploadZone();
+    // Update toggle button styles
+    $("btn-camera").classList.toggle("active", mode === "camera");
+    $("btn-upload").classList.toggle("active", mode === "upload");
 
-    // Update toggle buttons
-    $btnCamera().classList.toggle("active", mode === "camera");
-    $btnUpload().classList.toggle("active", mode === "upload");
-
-    // Hide the previous result
+    // Reset shared UI
     hideDiagnosis();
     hideError();
-    $retakeBtn().style.display = "none";
+    $("retake-btn").style.display = "none";
 
     if (mode === "camera") {
-        // Hide upload UI
-        zone.style.display = "none";
-        preview.style.display = "none";
-
-        // Start or resume camera
-        if (cameraAvailable || !cameraStarted) {
-            startCamera()
-                .then(() => {
-                    $overlay().classList.add("hidden");
-                    setStatus("Scanning", "ready");
-                })
-                .catch((err) => {
-                    showCameraUnavailable();
-                });
-        } else {
-            showCameraUnavailable();
-        }
+        enterCameraMode();
     } else {
-        // Upload mode
-        stopCamera();
-        preview.style.display = "none";
-        zone.style.display = "flex";
-        setStatus("Upload a photo", "ready");
+        enterUploadMode();
     }
 }
 
+function enterCameraMode() {
+    // Hide upload UI
+    $("upload-zone").style.display = "none";
+    $("preview-image").style.display = "none";
+
+    // Show loading overlay while camera starts
+    $("loading-overlay").classList.remove("hidden");
+    $("loading-msg").textContent = "Starting camera…";
+    setStatus("Starting camera…", "loading");
+
+    // Create a completely fresh camera
+    createCamera()
+        .then(() => {
+            $("loading-overlay").classList.add("hidden");
+            setStatus("Scanning", "ready");
+        })
+        .catch((err) => {
+            console.warn("Camera failed:", err.message);
+            showCameraUnavailable();
+        });
+}
+
+function enterUploadMode() {
+    // ★ Fully destroy camera — release all hardware
+    destroyCamera();
+
+    // Show upload UI
+    $("preview-image").style.display = "none";
+    $("upload-zone").style.display = "flex";
+
+    // Hide placeholder if visible
+    const ph = $("viewfinder").querySelector(".camera-placeholder");
+    if (ph) ph.style.display = "none";
+
+    setStatus("Upload a photo", "ready");
+}
+
 function showCameraUnavailable() {
-    cameraAvailable = false;
-    $overlay().classList.add("hidden");
+    destroyCamera(); // Make sure everything is cleaned up
+    $("loading-overlay").classList.add("hidden");
 
-    // Clear viewfinder and show placeholder
-    const vf = $viewfinder();
-    const canvas = vf.querySelector("canvas");
-    if (canvas) canvas.style.display = "none";
-
-    // Check if placeholder already exists
-    if (!vf.querySelector(".camera-placeholder")) {
-        const ph = document.createElement("div");
+    const vf = $("viewfinder");
+    let ph = vf.querySelector(".camera-placeholder");
+    if (!ph) {
+        ph = document.createElement("div");
         ph.className = "camera-placeholder";
         ph.innerHTML = `
             <span class="icon">📷</span>
             <p>Camera not available.<br>Switch to <strong>Upload Photo</strong> mode.</p>
         `;
         vf.appendChild(ph);
-    } else {
-        vf.querySelector(".camera-placeholder").style.display = "flex";
     }
+    ph.style.display = "flex";
 
     setStatus("Camera unavailable", "error");
 }
 
 function handleRetake() {
     hideDiagnosis();
-    $retakeBtn().style.display = "none";
+    $("retake-btn").style.display = "none";
 
     if (currentMode === "upload") {
-        $preview().style.display = "none";
-        $uploadZone().style.display = "flex";
+        $("preview-image").style.display = "none";
+        $("upload-zone").style.display = "flex";
         setStatus("Upload a photo", "ready");
     } else {
-        switchMode("camera");
+        // Re-create camera from scratch
+        enterCameraMode();
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  INIT
+//  VISIBILITY CHANGE — Full stop/restart, not pause/resume
+// ═══════════════════════════════════════════════════════════════
+
+document.addEventListener("visibilitychange", () => {
+    // Only manage camera if we're actually in camera mode
+    if (currentMode !== "camera") return;
+
+    if (document.hidden) {
+        // ★ Tab hidden: fully destroy camera to release hardware lock.
+        //   This prevents frozen frames and frees the camera for other apps.
+        console.log("[Visibility] Tab hidden — destroying camera");
+        destroyCamera();
+    } else {
+        // ★ Tab visible again: create a completely new camera stream.
+        //   Do NOT try to resume a stale stream — it will be frozen.
+        console.log("[Visibility] Tab visible — recreating camera");
+        if (modelReady) {
+            $("loading-overlay").classList.remove("hidden");
+            $("loading-msg").textContent = "Restarting camera…";
+            setStatus("Restarting camera…", "loading");
+
+            createCamera()
+                .then(() => {
+                    $("loading-overlay").classList.add("hidden");
+                    setStatus("Scanning", "ready");
+                })
+                .catch((err) => {
+                    console.warn("Camera restart failed:", err.message);
+                    showCameraUnavailable();
+                });
+        }
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  INIT — Load model first, then camera (only if in camera mode)
 // ═══════════════════════════════════════════════════════════════
 
 async function init() {
     try {
-        // 1. Backend
+        // 1. Set up TF.js backend (no camera permission needed)
         setStatus("Setting up AI engine…", "loading");
-        $loadingMsg().textContent = "Setting up AI engine…";
+        $("loading-msg").textContent = "Setting up AI engine…";
         await initBackend();
 
-        // 2. Load model
+        // 2. Load model (no camera permission needed)
         setStatus("Loading model…", "loading");
-        $loadingMsg().textContent = "Loading model…";
+        $("loading-msg").textContent = "Loading model…";
         model = await tmImage.load(
             MODEL_DIR + "model.json",
             MODEL_DIR + "metadata.json"
         );
+        modelReady = true;
+        console.log(`Model loaded: ${model.getTotalClasses()} classes`);
 
-        // Verify class labels loaded correctly
-        const totalClasses = model.getTotalClasses();
-        console.log(`Model loaded: ${totalClasses} classes`);
-
-        // 3. Wire up file upload
+        // 3. Wire up file upload (no camera permission needed)
         setupFileUpload();
 
-        // 4. Try starting camera (default mode)
-        setStatus("Starting camera…", "loading");
-        $loadingMsg().textContent = "Starting camera…";
+        // 4. Start camera ONLY if we're in camera mode (the default)
+        if (currentMode === "camera") {
+            setStatus("Starting camera…", "loading");
+            $("loading-msg").textContent = "Starting camera…";
 
-        try {
-            await startCamera();
-            $overlay().classList.add("hidden");
-            setStatus("Scanning", "ready");
-        } catch (camErr) {
-            console.warn("Camera unavailable:", camErr.message);
-            $overlay().classList.add("hidden");
-            showCameraUnavailable();
+            try {
+                await createCamera();
+                $("loading-overlay").classList.add("hidden");
+                setStatus("Scanning", "ready");
+            } catch (camErr) {
+                console.warn("Camera unavailable:", camErr.message);
+                showCameraUnavailable();
+            }
+        } else {
+            // Upload mode — no camera needed
+            $("loading-overlay").classList.add("hidden");
+            setStatus("Upload a photo", "ready");
         }
+
     } catch (err) {
         console.error("Init failed:", err);
         let msg = err.message || "Unknown error";
@@ -463,19 +508,6 @@ async function init() {
         showError(msg);
     }
 }
-
-// ── Visibility: pause/resume to save battery ─────────────────
-document.addEventListener("visibilitychange", () => {
-    if (!cameraAvailable || currentMode !== "camera") return;
-    if (document.hidden) {
-        isRunning = false;
-        if (webcam) webcam.stop();
-    } else if (model && webcam) {
-        webcam.play();
-        isRunning = true;
-        window.requestAnimationFrame(cameraLoop);
-    }
-});
 
 // ── Go ───────────────────────────────────────────────────────
 window.addEventListener("load", init);
